@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 from alive_progress import alive_bar
 import time
@@ -66,18 +67,18 @@ variaveis_de_controle = {
     'importa_deparas': True,
     'importa_base_centro_ebs': True,
     # BASE BALANCETE EBS
-    'lista_balancete_ebs': True,
-    'importa_balancete_ebs': True,
+    'lista_balancete_ebs': False,
+    'importa_balancete_ebs': False,
     # BASE RAZÃO EBS
-    'importa_razao_ebs': True,
-    'update_razao_ebs': True,
+    'importa_razao_ebs': False,
+    'update_razao_ebs': False,
     # BASE PAC
     'importa_base_pac': False,
     'ajuste_manual_pac': False,
     # CALCULOS CPV
     'calcula_cpv': True,
     # CALCULOS COMPRAS CPV
-    'calcula_compras_cpv': True,
+    'calcula_compras_cpv': False,
     # DEMONSTRATIVO CPV
     'gera_demonstrativo_cpv': True,
     # BASES ANALITCAS
@@ -277,11 +278,6 @@ if variaveis_de_controle['lista_balancete_ebs']:
     # Salva o dataframe no sqlite
     lista_balancete_ebs.to_sql(
         'LISTA_BALANCETE_EBS', conn, if_exists='replace', index=False)
-
-else:
-    lista_balancete_ebs = pd.read_sql(
-        "select * from LISTA_BALANCETE_EBS", conn)
-
 
 # Importa o Balancete EBS -- IMPORTA OS ARQUIVOS PARA O BANCO DE DADOS
 if variaveis_de_controle['importa_balancete_ebs']:
@@ -698,8 +694,7 @@ if variaveis_de_controle['importa_base_pac']:
     except Exception as e:
         print(f"{RED}Erro ao processar os dados: {e}")
 
-# if variaveis_de_controle['importa_sas']:
-
+if variaveis_de_controle['importa_sas']:
     print(f"{BLUE}Importa Base SAS")
 
     try:
@@ -727,25 +722,13 @@ if variaveis_de_controle['importa_base_pac']:
     except Exception as e:
         print(f"{RED}Erro ao importar o arquivo SAS: {e}")
 
-
-# Registrar o tempo de término
-end_time = time.time()
-
-# Calcular e imprimir o tempo de execução
-execution_time = end_time - start_time
-hours, rem = divmod(execution_time, 3600)
-minutes, seconds = divmod(rem, 60)
-print(f"{BLUE}Tempo de execução: {int(hours):02}:{
-      int(minutes):02}:{int(seconds):02}")
-
-
-# Realizando os cálculos ~~ Novo Processo:
+# Realizando os cálculos ~~ Novo Processo:  (MESMA QUE A BASE_CALCULLO_CPV DO SAS)
 if variaveis_de_controle['calcula_cpv']:
     # Criação da tabela BASE_CALCULO_CPV
     print(f"{BLUE}Criando a tabela BASE_CALCULO_CPV")
 
     try:
-        # Query para criar a tabela BASE_CALCULO_CPV
+        # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE GRADES
         query_base_calculo_cpv = """
         SELECT DISTINCT
             strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
@@ -775,8 +758,8 @@ if variaveis_de_controle['calcula_cpv']:
     print(f"{BLUE}Atualizando base de CPV com dados da base RAZAO")
 
     try:
-        # Atualizando a tabela BASE_CALCULO_CPV com dados da base RAZAO
-        query_insert_base_calculo_cpv = """
+        # Atualizando a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE RAZAO
+        query_insert_base_calculo_cpv_RAZAO = """
         INSERT INTO BASE_CALCULO_CPV (DATA_BASE, EMPRESA, CONTA, FONTE, CALCULO, VALOR)
         SELECT 
             DATA_BASE,
@@ -882,26 +865,202 @@ if variaveis_de_controle['calcula_cpv']:
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
         """
         # Executar a query de inserção
-        conn.execute(query_insert_base_calculo_cpv)
+        conn.execute(query_insert_base_calculo_cpv_RAZAO)
         conn.commit()
 
         print(
             f"{GREEN}Dados inseridos na tabela BASE_CALCULO_CPV com dados da RAZAO EBS com sucesso!")
     except Exception as e:
+        print(
+            f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV com dados da RAZAO: {e}")
+
+    # INSERT BASE CALCULO CPV COM DADOS DA BASE PAC ----------------------
+
+    # Criar o DataFrame de mapeamento
+    month_map = pd.DataFrame({
+        'PERIODO': ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'],
+        'MONTH_NUM': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']})
+
+    # Gerar a parte da query SQL para a conversão de PERIO    DO para DATA_BASE
+    case_statements = "CASE "
+    for _, row in month_map.iterrows():
+        case_statements += f"WHEN substr(PERIODO, 1, 3) = '{row['PERIODO']}' THEN '{row['MONTH_NUM']}' "
+    case_statements += "END"
+
+    # Parte da query SQL completa
+    data_base_conversion = f"'01' || {case_statements} || '20' || substr(PERIODO, 5, 2) AS DATA_BASE"
+
+    # INSERT BASE CALCULO CPV COM DADOS DA BASE PAC
+    print(f"{BLUE}INSERINDO DADOS BASE PAC NA TABELA BASE CALCULO CPV")
+
+    try:
+        # Obter a lista de empresas
+        query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
+        empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
+
+        for empresa in empresas:
+            # Criar a query para inserir os dados na tabela BASE_CALCULO_CPV
+            query_insert_base_calculo_cpv_PAC = f"""
+            INSERT INTO BASE_CALCULO_CPV (DATA_BASE, EMPRESA, CONTA, FONTE, CALCULO, VALOR)
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA,
+                A.CONTA,
+                'BASE_PAC' AS FONTE,
+                'Entradas de NFs' AS CALCULO,
+                ROUND(SUM(vlr_transacao), 2) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
+            AND A.CONTA IN (1140101982, 1140101984)
+            AND A.EMPRESA = '{empresa}'
+            GROUP BY DATA_BASE, A.EMPRESA, A.CONTA
+
+            UNION
+
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA,
+                A.CONTA,
+                'BASE_PAC' AS FONTE,
+                'Entradas de NFs Serviços' AS CALCULO,
+                ROUND(SUM(vlr_transacao), 2) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND FONTE = 'BASE ELAB'
+            AND A.EMPRESA = '{empresa}'
+            AND B.GRUPO IN ('1.3 - PRODUTOS EM ELABORACAO')
+            GROUP BY DATA_BASE, A.EMPRESA, A.CONTA
+
+            UNION
+
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA,
+                A.CONTA,
+                'BASE_PAC' AS FONTE,
+                'Entrada Custo Folha MO' AS CALCULO,
+                ROUND(SUM(vlr_transacao), 2) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
+            AND A.EMPRESA = '{empresa}'
+            AND A.CONTA IN (1140201004)
+            GROUP BY DATA_BASE, A.EMPRESA, A.CONTA
+            """
+
+            # Executar a query
+            cursor = conn.cursor()
+            cursor.execute(query_insert_base_calculo_cpv_PAC)
+            conn.commit()
+
+            print(
+                f"{GREEN}Dados da empresa {empresa} inseridos com sucesso na tabela BASE_CALCULO_CPV!")
+
+    except Exception as e:
         print(f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV: {e}")
 
-    # Exportar a tabela BASE_CALCULO_CPV para um arquivo CSV
+    # Exportar a tabela BASE_CALCULO_CPV para um arquivo xlsl
     try:
         df_base_calculo_cpv = pd.read_sql_query(
             "SELECT * FROM BASE_CALCULO_CPV", conn)
         caminho_arquivo_xlsx = os.path.join(
             pasta_banco_dados, 'BASE_CALCULO_CPV.xlsx')
-        df_base_calculo_cpv.to_csv(caminho_arquivo_xlsx, index=False)
+        df_base_calculo_cpv.to_excel(caminho_arquivo_xlsx, index=False)
         print(
             f"{GREEN}Tabela BASE_CALCULO_CPV exportada com sucesso para {caminho_arquivo_xlsx}")
     except Exception as e:
         print(f"{RED}Erro ao exportar a tabela BASE_CALCULO_CPV: {e}")
 
+    # # Verificar se a variável de controle está definida
+    # if variaveis_de_controle['calcula_compras_cpv']:
+    #     print(f"{BLUE}Criando tabelas BASE_COMPRAS_CPV para cada empresa")
+
+    #     try:
+    #         # Obter a lista de empresas
+    #         query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
+    #         empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
+
+    #         for empresa in empresas:
+    #             # Criar a tabela BASE_COMPRAS_CPV para a empresa atual
+    #             query_base_calculo_compras_cpv = f"""
+    #             SELECT DISTINCT
+    #                 strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
+    #                 A.EMPRESA,
+    #                 A.CONTA,
+    #                 'BASE_PAC' AS FONTE,
+    #                 'Entradas de NFs' AS COLUNA,
+    #                 ROUND(SUM(vlr_transacao), 0.01) AS VALOR
+    #             FROM BASE_PAC A
+    #             INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+    #             WHERE vlr_transacao <> 0
+    #             AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
+    #             AND A.CONTA IN (1140101982, 1140101984)
+    #             AND A.EMPRESA = '{empresa}'
+    #             GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+    #             UNION
+
+    #             SELECT DISTINCT
+    #                 strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
+    #                 A.EMPRESA,
+    #                 A.CONTA,
+    #                 'BASE_PAC' AS FONTE,
+    #                 'Entradas de NFs Serviços' AS COLUNA,
+    #                 ROUND(SUM(vlr_transacao), 0.01) AS VALOR
+    #             FROM BASE_PAC  A
+    #             INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+    #             WHERE vlr_transacao <> 0
+    #             AND FONTE = 'BASE ELAB'
+    #             AND A.EMPRESA = '{empresa}'
+    #             AND B.GRUPO IN ('1.3 - PRODUTOS EM ELABORACAO')
+    #             GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+    #             UNION
+
+    #             SELECT DISTINCT
+    #                 strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
+    #                 A.EMPRESA,
+    #                 A.CONTA,
+    #                 'BASE_PAC' AS FONTE,
+    #                 'Entrada Custo Folha MO' AS COLUNA,
+    #                 ROUND(SUM(vlr_transacao), 0.01) AS VALOR
+    #             FROM BASE_PAC  A
+    #             INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+    #             WHERE vlr_transacao <> 0
+    #             AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
+    #             AND A.EMPRESA = '{empresa}'
+    #             AND A.CONTA IN (1140201004)
+    #             GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+    #             """
+    #             # Executar a query e armazenar os resultados em um DataFrame
+    #             df = pd.read_sql(query_base_calculo_compras_cpv, conn)
+
+    #             # Nome da tabela específica para a empresa
+    #             table_name = f"BASE_PAC_{empresa}"
+
+    #             # Criar ou atualizar a tabela específica para a empresa
+    #             df.to_sql(table_name, conn, if_exists="replace", index=False)
+
+    #             print(f"{GREEN}Tabela {table_name} atualizada com sucesso!")
+
+    #     except Exception as e:
+    #         print(f"{RED}Erro ao criar as tabelas BASE_PAC: {e}")
+
+
 # Fechar a conexão
 conn.close()
 conn_TP215.dispose()
+
+# Registrar o tempo de término
+end_time = time.time()
+
+# Calcular e imprimir o tempo de execução
+execution_time = end_time - start_time
+hours, rem = divmod(execution_time, 3600)
+minutes, seconds = divmod(rem, 60)
+print(f"{BLUE}Tempo de execução: {int(hours):02}:{
+      int(minutes):02}:{int(seconds):02}")
