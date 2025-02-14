@@ -39,13 +39,13 @@ try:
     os.environ['OCI_LIB64'] = r'\\172.22.0.33\Departamentos\Controladoria\aplicações\instantclient_21_11'
     os.environ['PATH'] = r'\\172.22.0.33\Departamentos\Controladoria\aplicações\instantclient_21_11;' + os.environ['PATH']
     # os.environ['ORA_TZFILE'] = r'\\172.22.0.33\Departamentos\Controladoria\aplicações\instantclient_21_11\timezone_18.dat'
-    # Apontamentos na minha máquina, para quando não tiver acesso na rede, ajuste necessário também na variaeceis do ambiente
+    # Apontamentos na minha máquina, para quando não tiver acesso na rede, ajuste necessário também na variacoes do ambiente
     # os.environ['OCI_LIB64'] = r'C:\oracle\instantclient_23_6'p
     # os.environ['PATH'] = r'C:\oracle\instantclient_23_6;' + os.environ['PATH']
     print(f"{GREEN}Variáveis de ambiente configuradas com sucesso!")
 except Exception as e:
     print(f"{RED}Falha ao configurar as variáveis de ambiente: %s" % e)
-    sys.exit(1)  # Encerra o script em caso de falha
+
 
 # Variáveis de configuração
 variaveis_de_configuracao = {
@@ -67,27 +67,51 @@ variaveis_de_controle = {
     'importa_deparas': True,
     'importa_base_centro_ebs': True,
     # BASE BALANCETE EBS
-    'lista_balancete_ebs': False,
-    'importa_balancete_ebs': False,
+    'lista_balancete_ebs': True,
+    'importa_balancete_ebs': True,
     # BASE RAZÃO EBS
-    'importa_razao_ebs': False,
-    'update_razao_ebs': False,
+    'importa_razao_ebs': True,
+    'update_razao_ebs': True,
     # BASE PAC
-    'importa_base_pac': False,
-    'ajuste_manual_pac': False,
+    'importa_base_pac': True,
+    'ajuste_manual_pac': True,
     # CALCULOS CPV
     'calcula_cpv': True,
+    # CALCULOS COMPRAS PAC
+    'calcula_compras_pac': True,
     # CALCULOS COMPRAS CPV
-    'calcula_compras_cpv': False,
+    'calcula_compras_cpv': True,
     # DEMONSTRATIVO CPV
-    'gera_demonstrativo_cpv': True,
+    'gera_demonstrativo_cpv': False,
     # BASES ANALITCAS
-    'exporta_base_analitica': True,
+    'exporta_base_analitica': False,
     # VALIDAÇÃO CMV
     'validacao_cmv': False,
     # SAS
     'importa_sas': False
 }
+
+# Ajuste de DATABASE para base PAC
+
+try:
+    # Criar o DataFrame de mapeamento
+    month_map = pd.DataFrame({
+        'PERIODO': ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'],
+        'MONTH_NUM': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+    })
+
+    # Gerar a parte da query SQL para a conversão de PERIODO para DATA_BASE
+    case_statements = "CASE "
+    for _, row in month_map.iterrows():
+        case_statements += f"WHEN substr(PERIODO, 1, 3) = '{row['PERIODO']}' THEN '{row['MONTH_NUM']}' "
+    case_statements += "END"
+
+    # Parte da query SQL completa
+    data_base_conversion = f"'01' || {case_statements} || '20' || substr(PERIODO, 5, 2) AS DATA_BASE"
+
+except Exception as e:
+    print(f"{RED}Erro na padronização de database: {e}")
+
 
 # Caminho do banco de dados
 pasta_banco_dados = os.path.join(
@@ -874,22 +898,6 @@ if variaveis_de_controle['calcula_cpv']:
         print(
             f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV com dados da RAZAO: {e}")
 
-    # INSERT BASE CALCULO CPV COM DADOS DA BASE PAC ----------------------
-
-    # Criar o DataFrame de mapeamento
-    month_map = pd.DataFrame({
-        'PERIODO': ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'],
-        'MONTH_NUM': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']})
-
-    # Gerar a parte da query SQL para a conversão de PERIO    DO para DATA_BASE
-    case_statements = "CASE "
-    for _, row in month_map.iterrows():
-        case_statements += f"WHEN substr(PERIODO, 1, 3) = '{row['PERIODO']}' THEN '{row['MONTH_NUM']}' "
-    case_statements += "END"
-
-    # Parte da query SQL completa
-    data_base_conversion = f"'01' || {case_statements} || '20' || substr(PERIODO, 5, 2) AS DATA_BASE"
-
     # INSERT BASE CALCULO CPV COM DADOS DA BASE PAC
     print(f"{BLUE}INSERINDO DADOS BASE PAC NA TABELA BASE CALCULO CPV")
 
@@ -963,7 +971,6 @@ if variaveis_de_controle['calcula_cpv']:
     except Exception as e:
         print(f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV: {e}")
 
-    # Exportar a tabela BASE_CALCULO_CPV para um arquivo xlsl
     try:
         df_base_calculo_cpv = pd.read_sql_query(
             "SELECT * FROM BASE_CALCULO_CPV", conn)
@@ -975,80 +982,201 @@ if variaveis_de_controle['calcula_cpv']:
     except Exception as e:
         print(f"{RED}Erro ao exportar a tabela BASE_CALCULO_CPV: {e}")
 
-    # # Verificar se a variável de controle está definida
-    # if variaveis_de_controle['calcula_compras_cpv']:
-    #     print(f"{BLUE}Criando tabelas BASE_COMPRAS_CPV para cada empresa")
+# CRIA TABELA PAC POR EMPRESA
+if variaveis_de_controle['calcula_compras_pac']:
+    print(f"{BLUE}Criando tabelas BASE_COMPRAS_CPV para cada empresa")
 
-    #     try:
-    #         # Obter a lista de empresas
-    #         query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
-    #         empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
+    try:
+        # Criar o DataFrame de mapeamento
+        month_map = pd.DataFrame({
+            'PERIODO': ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'],
+            'MONTH_NUM': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+        })
 
-    #         for empresa in empresas:
-    #             # Criar a tabela BASE_COMPRAS_CPV para a empresa atual
-    #             query_base_calculo_compras_cpv = f"""
-    #             SELECT DISTINCT
-    #                 strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
-    #                 A.EMPRESA,
-    #                 A.CONTA,
-    #                 'BASE_PAC' AS FONTE,
-    #                 'Entradas de NFs' AS COLUNA,
-    #                 ROUND(SUM(vlr_transacao), 0.01) AS VALOR
-    #             FROM BASE_PAC A
-    #             INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
-    #             WHERE vlr_transacao <> 0
-    #             AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
-    #             AND A.CONTA IN (1140101982, 1140101984)
-    #             AND A.EMPRESA = '{empresa}'
-    #             GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+        # Gerar a parte da query SQL para a conversão de PERIODO para DATA_BASE
+        case_statements = "CASE "
+        for _, row in month_map.iterrows():
+            case_statements += f"WHEN substr(PERIODO, 1, 3) = '{row['PERIODO']}' THEN '{row['MONTH_NUM']}' "
+        case_statements += "END"
 
-    #             UNION
+        # Parte da query SQL completa
+        data_base_conversion = f"'01' || {case_statements} || '20' || substr(PERIODO, 5, 2) AS DATA_BASE"
 
-    #             SELECT DISTINCT
-    #                 strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
-    #                 A.EMPRESA,
-    #                 A.CONTA,
-    #                 'BASE_PAC' AS FONTE,
-    #                 'Entradas de NFs Serviços' AS COLUNA,
-    #                 ROUND(SUM(vlr_transacao), 0.01) AS VALOR
-    #             FROM BASE_PAC  A
-    #             INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
-    #             WHERE vlr_transacao <> 0
-    #             AND FONTE = 'BASE ELAB'
-    #             AND A.EMPRESA = '{empresa}'
-    #             AND B.GRUPO IN ('1.3 - PRODUTOS EM ELABORACAO')
-    #             GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+    except Exception as e:
+        print(f"{RED}Erro na padronização de database: {e}")
 
-    #             UNION
+    try:
+        # Obter a lista de empresas
+        query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
+        empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
 
-    #             SELECT DISTINCT
-    #                 strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
-    #                 A.EMPRESA,
-    #                 A.CONTA,
-    #                 'BASE_PAC' AS FONTE,
-    #                 'Entrada Custo Folha MO' AS COLUNA,
-    #                 ROUND(SUM(vlr_transacao), 0.01) AS VALOR
-    #             FROM BASE_PAC  A
-    #             INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
-    #             WHERE vlr_transacao <> 0
-    #             AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
-    #             AND A.EMPRESA = '{empresa}'
-    #             AND A.CONTA IN (1140201004)
-    #             GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
-    #             """
-    #             # Executar a query e armazenar os resultados em um DataFrame
-    #             df = pd.read_sql(query_base_calculo_compras_cpv, conn)
+        for empresa in empresas:
+            # Criar a tabela BASE_COMPRAS_CPV para a empresa atual
+            query_base_calculo_compras_cpv = f"""
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA,
+                A.CONTA,
+                'BASE_PAC' AS FONTE,
+                'Entradas de NFs' AS COLUNA,
+                ROUND(SUM(vlr_transacao), 0.01) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
+            AND A.CONTA IN (1140101982, 1140101984)
+            AND A.EMPRESA = '{empresa}'
+            GROUP BY DATA_BASE, A.EMPRESA, A.CONTA
 
-    #             # Nome da tabela específica para a empresa
-    #             table_name = f"BASE_PAC_{empresa}"
+            UNION
+            
+            SELECT DISTINCT
+               {data_base_conversion},
+                A.EMPRESA,
+                A.CONTA,
+                'BASE_PAC' AS FONTE,
+                'Entradas de NFs Serviços' AS COLUNA,
+                ROUND(SUM(vlr_transacao), 0.01) AS VALOR
+            FROM BASE_PAC  A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND FONTE = 'BASE ELAB'
+            AND A.EMPRESA = '{empresa}'
+            AND B.GRUPO IN ('1.3 - PRODUTOS EM ELABORACAO')
+            GROUP BY DATA_BASE, A.EMPRESA, A.CONTA
 
-    #             # Criar ou atualizar a tabela específica para a empresa
-    #             df.to_sql(table_name, conn, if_exists="replace", index=False)
+            UNION
 
-    #             print(f"{GREEN}Tabela {table_name} atualizada com sucesso!")
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA,
+                A.CONTA,
+                'BASE_PAC' AS FONTE,
+                'Entrada Custo Folha MO' AS COLUNA,
+                ROUND(SUM(vlr_transacao), 0.01) AS VALOR
+            FROM BASE_PAC  A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR')
+            AND A.EMPRESA = '{empresa}'
+            AND A.CONTA IN (1140201004)
+            GROUP BY DATA_BASE, A.EMPRESA, A.CONTA
+            """
+            # Executar a query e armazenar os resultados em um DataFrame
+            df_pac_empresas = pd.read_sql(query_base_calculo_compras_cpv, conn)
 
-    #     except Exception as e:
-    #         print(f"{RED}Erro ao criar as tabelas BASE_PAC: {e}")
+            # Nome da tabela específica para a empresa
+            table_name = f"BASE_PAC_{empresa}"
+
+            # Criar ou atualizar a tabela específica para a empresa
+            df_pac_empresas.to_sql(
+                table_name, conn, if_exists="replace", index=False)
+
+            print(f"{GREEN}Tabela {table_name} atualizada com sucesso!")
+    except Exception as e:
+        print(f"{RED}Erro ao criar as tabelas BASE_PAC_EMPRESA: {e}")
+    finally:
+        conn.close()
+
+conn = sqlite3.connect(os.path.join(pasta_banco_dados, 'CPV.sqlite'))
+
+# CRIA TABELA DE COMPRAS CPV
+if variaveis_de_controle['calcula_compras_cpv']:
+    print(f"{BLUE}Criando a tabela CALCULO_COMPRAS_CPV")
+
+    try:
+        # Antes de inserir os dados, exclua a tabela se ela existir
+        conn.execute("DROP TABLE IF EXISTS CALCULO_COMPRAS_CPV;")
+
+        # Executa a query e salva os resultados em um DataFrame
+        query_calculo_compras_cpv = """
+            SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Entradas de NFs' AS CALCULO,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'COMPRAS'
+        AND ORIGEM = 'Contas a Pagar'
+        AND A.CONTA IN (1140101982, 1140101984)
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+        UNION
+          SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA,
+            CONTA,
+            'BASE_PAC/RAZAO' AS FONTE,
+            'Composição das compras' AS CALCULO,
+            SUM(VALOR) AS VALOR
+        FROM BASE_CALCULO_CPV
+        WHERE CALCULO IN ('Compras Material e serviços', 'Serviços elaboração', 'AVP')
+        GROUP BY DATA_BASE, EMPRESA, CONTA
+        UNION
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Entrada Custo Folha MO' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 0.01) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'COMPRAS'
+        AND A.CONTA IN (1140201004)
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+        UNION
+        SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Lançamentos de AVP' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 0.01) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'AVP'
+        AND B.GRUPO IN ('1.2 - PRODUTO ACABADO', '1.1 - MATERIAS PRIMAS Total')
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+        UNION
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Outros Lançamentos' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 0.01) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'Reclassificações/Outros'
+        AND A.CONTA = 1140201004
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+        UNION
+         SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA,
+            CONTA,
+            'BASE_PAC/RAZAO' AS FONTE,
+            'Check' AS CALCULO,
+            1 AS VALOR
+        FROM BASE_CALCULO_CPV
+        WHERE CALCULO IN ('Compras Material e serviços', 'Serviços elaboração', 'AVP')
+        GROUP BY DATA_BASE, EMPRESA, CONTA
+        """
+
+        # Salva a query em um DataFrame
+        df_compras_cpv = pd.read_sql(query_calculo_compras_cpv, conn)
+
+        # Substitui a tabela no banco de dados com os novos dados
+        df_compras_cpv.to_sql("CALCULO_COMPRAS_CPV", conn,
+                              if_exists="replace", index=False)
+
+        print(f"{GREEN}Tabela CALCULO_COMPRAS_CPV criada/atualizada com sucesso!")
+
+    except Exception as e:
+        print(f"{RED}Erro ao calcular Compras CPV: {e}")
 
 
 # Fechar a conexão
@@ -1064,3 +1192,6 @@ hours, rem = divmod(execution_time, 3600)
 minutes, seconds = divmod(rem, 60)
 print(f"{BLUE}Tempo de execução: {int(hours):02}:{
       int(minutes):02}:{int(seconds):02}")
+
+# Encerrar o script
+sys.exit()
