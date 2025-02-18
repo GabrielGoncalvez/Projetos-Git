@@ -49,8 +49,8 @@ except Exception as e:
 
 # Variáveis de configuração
 variaveis_de_configuracao = {
-    'DT_INI': '01/08/2024',  # DATA INICIAL DO PERÍODO DE ATUALIZAÇÃO
-    'DT_FIM': '31/08/2024'  # DATA FINAL DO PERÍODO DE ATUALIZAÇÃO
+    'DT_INI': '01/01/2024',  # DATA INICIAL DO PERÍODO DE ATUALIZAÇÃO
+    'DT_FIM': '31/01/2025'  # DATA FINAL DO PERÍODO DE ATUALIZAÇÃO
 }
 
 
@@ -64,25 +64,26 @@ print(f"{BLUE}Tempo total de execução: {elapsed_time:.2f} segundos")
 # Variáveis de controle
 variaveis_de_controle = {
     # DEPARA e BASES COMPLEMENTARES
-    'importa_deparas': True,
-    'importa_base_centro_ebs': True,
+    'importa_deparas': False,
+    'importa_base_centro_ebs': False,
     # BASE BALANCETE EBS
-    'lista_balancete_ebs': True,
-    'importa_balancete_ebs': True,
+    'lista_balancete_ebs': False,
+    'importa_balancete_ebs': False,
     # BASE RAZÃO EBS
-    'importa_razao_ebs': True,
-    'update_razao_ebs': True,
+    'importa_razao_ebs': False,
+    'update_razao_ebs': False,
     # BASE PAC
-    'importa_base_pac': True,
-    'ajuste_manual_pac': True,
+    'importa_base_pac': False,
+    'ajuste_manual_pac': False,
     # CALCULOS CPV
-    'calcula_cpv': True,
+    'calcula_cpv': False,
     # CALCULOS COMPRAS PAC
-    'calcula_compras_pac': True,
+    'calcula_compras_pac': False,
     # CALCULOS COMPRAS CPV
-    'calcula_compras_cpv': True,
+    'calcula_compras_cpv': False,
     # DEMONSTRATIVO CPV
-    'gera_demonstrativo_cpv': False,
+    'Primeiro_Demonstrativo_CPV': False,
+    'Segundo_Demonstrativo_CPV': True,
     # BASES ANALITCAS
     'exporta_base_analitica': False,
     # VALIDAÇÃO CMV
@@ -90,7 +91,6 @@ variaveis_de_controle = {
     # SAS
     'importa_sas': False
 }
-
 # Ajuste de DATABASE para base PAC
 
 try:
@@ -218,7 +218,7 @@ if variaveis_de_controle['importa_base_centro_ebs']:
 
         # Renomear a coluna 'CENTRO EBS' para 'CENTRO_EBS'
         df_centros_ebs.rename(
-            columns={'CENTRO EBS': 'CENTRO_EBS'}, inplace=True)
+            columns={'CENTRO EBS': 'CENTRO_EBS'}, inplace=False)
 
         # Insere os registros no banco de dados
         df_centros_ebs.to_sql('BASE_CENTROS_EBS', conn, if_exists='replace',
@@ -234,7 +234,7 @@ if variaveis_de_controle['importa_base_centro_ebs']:
         "CREATE INDEX IF NOT EXISTS idx_centro_ebs ON BASE_CENTROS_EBS(CENTRO_EBS);")
     conn.commit()
 
-# Lista os arquivos do Balancete EBS -- ARQUIVOS COM TODOS ANALITICOS POR MES - PREPARA OS ARQUIVOS PARA IMPORTAÇÃO
+# Lista os arquivos do Balancete EBS --  Apenas para saber quais arquivos estão disponíveis para o balancete
 if variaveis_de_controle['lista_balancete_ebs']:
 
     print(f"{BLUE}Lista Balancete EBS")
@@ -296,14 +296,14 @@ if variaveis_de_controle['lista_balancete_ebs']:
                                       'data_modificacao': [datetime.fromtimestamp(file_mtime).strftime('%Y-%m-%d %H:%M:%S')],
                                       'data_criacao': [datetime.fromtimestamp(file_ctime).strftime('%Y-%m-%d %H:%M:%S')],
                                       'data_atualizacao': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
-                                      'data_arquivo': [data_arquivo]})], ignore_index=True)
+                                      'data_arquivo': [data_arquivo]})], ignore_index=False)
                     bar()  # Atualiza a barra de progresso
 
     # Salva o dataframe no sqlite
     lista_balancete_ebs.to_sql(
         'LISTA_BALANCETE_EBS', conn, if_exists='replace', index=False)
 
-# Importa o Balancete EBS -- IMPORTA OS ARQUIVOS PARA O BANCO DE DADOS
+# Importa o Balancete EBS -- Importa os arquivos para tabela de balancete, que não tenha os memso MES_ANO já inseridos
 if variaveis_de_controle['importa_balancete_ebs']:
 
     print(f"{BLUE}Importa Balancete EBS")
@@ -363,7 +363,7 @@ if variaveis_de_controle['importa_balancete_ebs']:
                 'Conta': 'CONTA',
                 'Saldo Final': 'SALDO_FINAL',
                 'Empresa': 'EMPRESA',
-                'Subconta': 'SUBCONTA'}, inplace=True)
+                'Subconta': 'SUBCONTA'}, inplace=False)
 
             # Adiciona campo CHAVE concatenando os campos CONTA e SUBCONTA
             df['CHAVE'] = df['CONTA'].astype(str) + df['SUBCONTA'].astype(str)
@@ -373,7 +373,7 @@ if variaveis_de_controle['importa_balancete_ebs']:
 
            # Remove caracteres não numéricos e espaços em branco da coluna 'EMPRESA'
             df['EMPRESA'] = df['EMPRESA'].str.replace(
-                r'\D', '', regex=True).str.strip()
+                r'\D', '', regex=False).str.strip()
 
             # Converte a coluna 'EMPRESA' para inteiro
             df['EMPRESA'] = df['EMPRESA'].astype(int)
@@ -971,6 +971,7 @@ if variaveis_de_controle['calcula_cpv']:
     except Exception as e:
         print(f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV: {e}")
 
+    # Extraindo base CALCULO CPV
     try:
         df_base_calculo_cpv = pd.read_sql_query(
             "SELECT * FROM BASE_CALCULO_CPV", conn)
@@ -985,25 +986,6 @@ if variaveis_de_controle['calcula_cpv']:
 # CRIA TABELA PAC POR EMPRESA
 if variaveis_de_controle['calcula_compras_pac']:
     print(f"{BLUE}Criando tabelas BASE_COMPRAS_CPV para cada empresa")
-
-    try:
-        # Criar o DataFrame de mapeamento
-        month_map = pd.DataFrame({
-            'PERIODO': ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'],
-            'MONTH_NUM': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
-        })
-
-        # Gerar a parte da query SQL para a conversão de PERIODO para DATA_BASE
-        case_statements = "CASE "
-        for _, row in month_map.iterrows():
-            case_statements += f"WHEN substr(PERIODO, 1, 3) = '{row['PERIODO']}' THEN '{row['MONTH_NUM']}' "
-        case_statements += "END"
-
-        # Parte da query SQL completa
-        data_base_conversion = f"'01' || {case_statements} || '20' || substr(PERIODO, 5, 2) AS DATA_BASE"
-
-    except Exception as e:
-        print(f"{RED}Erro na padronização de database: {e}")
 
     try:
         # Obter a lista de empresas
@@ -1075,10 +1057,6 @@ if variaveis_de_controle['calcula_compras_pac']:
             print(f"{GREEN}Tabela {table_name} atualizada com sucesso!")
     except Exception as e:
         print(f"{RED}Erro ao criar as tabelas BASE_PAC_EMPRESA: {e}")
-    finally:
-        conn.close()
-
-conn = sqlite3.connect(os.path.join(pasta_banco_dados, 'CPV.sqlite'))
 
 # CRIA TABELA DE COMPRAS CPV
 if variaveis_de_controle['calcula_compras_cpv']:
@@ -1177,6 +1155,388 @@ if variaveis_de_controle['calcula_compras_cpv']:
 
     except Exception as e:
         print(f"{RED}Erro ao calcular Compras CPV: {e}")
+
+# CRIA BASE DEMONSTRATIVA CPV
+if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
+    print(f"{Fore.BLUE}Gerando 1° Demonstrativo CPV")
+
+    try:
+        # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE GRADES
+        query_base_demonstrativo_cpv = """
+            SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA AS EMPRESA,
+            A.CONTA,
+            'BASE_GRADES' AS FONTE,
+            'Saldo Inicial' AS COLUNA,
+            ROUND(SUM(SALDO_FINAL), 2) AS VALOR
+        FROM BALANCETE_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE SALDO_FINAL <> 0
+        AND strftime('%m', DATA_BASE) = '12'
+        AND B.GRUPO IN ('1.1 - MATERIAS PRIMAS Total', '1.3 - PRODUTOS EM ELABORACAO', '1.2 - PRODUTO ACABADO')
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA AS EMPRESA,
+            A.CONTA,
+            'BASE_GRADES' AS FONTE,
+            'Saldo Inicial' AS COLUNA,
+            ROUND(SUM(SALDO_FINAL), 2) AS VALOR
+        FROM BALANCETE_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE SALDO_FINAL <> 0
+        AND strftime('%m', DATA_BASE) <> '12'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Compras Razão' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'COMPRAS'
+        AND A.CONTA IN (1140201004, 3210190001, 3210190002)
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Compras Razão' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'COMPRAS'
+        AND ORIGEM = 'Contas a Pagar'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Compras Razão' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'COMPRAS'
+        AND ORIGEM = 'CLL F189 INTEGRATED RCV'
+        AND A.EMPRESA = '139'
+        AND A.CONTA <> 3210180002
+        AND B.GRUPO = '3.1 - CUSTO SOBRE VENDAS TRANSITORIAS 321'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'AVP' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'AVP'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Custo Serviços / Outros' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'Reclassificações/Outros'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Custo Serviços / Outros' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO = 'PAC'
+        AND LANCAMENTO = 'PAC - VARIACAO BRL'
+        AND A.CONTA IN (1140201004)
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT DISTINCT
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_GRADES' AS FONTE,
+            'Saldo Grade' AS COLUNA,
+            ROUND(SUM(SALDO_FINAL), 2) AS VALOR
+        FROM BALANCETE_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE SALDO_FINAL <> 0
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Compras Razão' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO IN ('SERVIÇOS')
+        AND LANCAMENTO IN ('72158174 NFFs de Compra BRL', '72158175 NFFs de Compra BRL', '72186532 NFFs de Compra BRL', '72668678 NFFs de Compra BRL', '72487479 NFFs de Compra BRL')
+        AND A.CONTA IN (1140101982)
+        AND A.EMPRESA = '139'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Compras Razão' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE CLASSIFICACAO IN ('PAC')
+        AND HISTORICO = '819901-ITEM DOC 877-GLOBAL TECH RESOURCES LTDA EPP; 243070-SENSOR DE TEMPERATURA I12'
+        AND A.CONTA IN (1140101982)
+        AND EMPRESA = '139'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Compras Razão' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE A.CONTA IN (3210180993)
+        AND EMPRESA = '139'
+        AND CLASSIFICACAO IN ('PAC', 'INV')
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+
+        SELECT 
+            DATA_BASE,
+            EMPRESA,
+            A.CONTA,
+            'BASE_RAZAO' AS FONTE,
+            'Custo Serviços / Outros' AS COLUNA,
+            ROUND(SUM(VLR_MOEDA_NACIONAL), 2) AS VALOR
+        FROM RAZAO_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE HISTORICO LIKE '%TRANSF.P/ELAB. - Editorial Intercompany - CL_%'
+        AND A.CONTA IN (3210180995)
+        AND EMPRESA = '139'
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA;
+        """
+        # Executar a query e armazenar os resultados em um DataFrame
+        df = pd.read_sql(query_base_demonstrativo_cpv, conn)
+
+        # Criar ou atualizar a tabela
+        df.to_sql("DEMONSTRATIVO_CPV", conn, if_exists="replace", index=False)
+
+        print(f"{Fore.GREEN}Tabela DEMONSTRATIVO_CPV atualizada com sucesso!")
+
+        # # Deletar registros onde FONTE está em ('Grades/Pac/Razão')
+        # delete_query = """
+        # DELETE FROM DEMONSTRATIVO_CPV WHERE FONTE IN ('BASE_GRADES', 'BASE_PAC', 'BASE_RAZAO')
+        # """
+        # conn.execute(delete_query)
+        # conn.commit()
+
+        # print(f"{Fore.GREEN}Registros deletados com sucesso!")
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao criar a tabela DEMONSTRATIVO_CPV: {e}")
+
+        # CRIA BASE SUMARIZADA DO DEMONSTRATIVO CPV
+
+if variaveis_de_controle['Segundo_Demonstrativo_CPV']:
+    print(f"{Fore.BLUE}Gerando 2° Demonstrativo CPV")
+
+    try:
+        # Passo 1:Base Demontrativo CPV_2, FONTE: RBS+BALANCETE
+        query_base_sumarizada_demonstrativo_cpv = """
+        SELECT * FROM DEMONSTRATIVO_CPV
+        UNION ALL
+        SELECT DISTINCT
+        DATA_BASE,
+        EMPRESA,
+        CONTA,
+        'GRADES/PAC/RAZÃO' AS FONTE,
+        'Total' as COLUNA,
+        SUM(VALOR) AS VALOR
+        FROM DEMONSTRATIVO_CPV
+        WHERE COLUNA <> 'Saldo Grade'
+        GROUP BY DATA_BASE, EMPRESA, CONTA   
+        
+        UNION ALL
+
+        SELECT DISTINCT
+        DATA_BASE,
+        EMPRESA,
+        CONTA,
+        'BASE_GRADES' AS FONTE,
+        'Fluxo' AS COLUNA,
+        1 AS VALOR
+        FROM DEMONSTRATIVO_CPV
+        WHERE COLUNA IN ('Saldo Grade', 'Saldo Inicial')
+        GROUP BY DATA_BASE, EMPRESA, CONTA
+
+        UNION ALL
+
+        SELECT DISTINCT
+        DATA_BASE,
+        EMPRESA,
+        CONTA,
+        'Grades/Pac/Razão' AS FONTE,
+        'Diferença' AS COLUNA,
+        1 AS VALOR
+        FROM DEMONSTRATIVO_CPV
+        GROUP BY DATA_BASE, EMPRESA, CONTA
+
+        UNION ALL
+
+        SELECT DISTINCT
+        DATA_BASE,
+        EMPRESA,
+        0 AS CONTA,
+        FONTE,
+        COLUNA,
+        VALOR
+        FROM DEMONSTRATIVO_CPV A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE B.GRUPO IN ('3.1 - CUSTO SOBRE VENDAS', '3.2 - CUSTO SOBRE VENDAS');
+        """
+
+        df1 = pd.read_sql(query_base_sumarizada_demonstrativo_cpv, conn)
+        print(f"{Fore.GREEN}Primeira query executada BALANCETE+RBS")
+
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao executar a primeira query BALANCETE+RBS: {e}")
+
+    try:
+        # Passo 2: Obter a lista de empresas
+        query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
+        empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
+
+        # Criar lista para armazenar os DataFrames da segunda query
+        df_list = []
+
+        for empresa in empresas:
+            query_base_sumarizada_demonstrativo_cpv_PAC = f"""
+            SELECT DISTINCT
+                {data_base_conversion}, 
+                A.EMPRESA AS EMPRESA,
+                A.CONTA AS 'CONTA',
+                'BASE_PAC' AS FONTE,
+                'Base PAC' AS COLUNA,
+                ROUND(SUM(vlr_transacao), 2) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0	
+            AND FONTE IN ('BASE PAC')
+            AND A.EMPRESA = '{empresa}'
+            AND VLR_TRANSACAO <> 0
+            GROUP BY A.EMPRESA, A.CONTA
+
+            UNION ALL  
+
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA AS EMPRESA,
+                A.CONTA as CONTA,
+                'BASE_PAC' AS FONTE,
+                'Base Elaboração' AS COLUNA,
+                ROUND(SUM(vlr_transacao), 2) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND A.EMPRESA = '{empresa}'
+            AND FONTE = 'BASE ELAB'
+            AND NOT (A.CONTA = 3210180993 AND A.EMPRESA = '139')
+            GROUP BY A.EMPRESA, A.CONTA
+
+            UNION ALL
+
+            SELECT DISTINCT
+                {data_base_conversion},
+                A.EMPRESA as EMPRESA,
+                A.CONTA as CONTA,
+                'BASE_PAC' AS FONTE,
+                'Compras PAC' AS COLUNA,
+                ROUND(SUM(vlr_transacao), 2) AS VALOR
+            FROM BASE_PAC A
+            INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+            WHERE vlr_transacao <> 0
+            AND A.EMPRESA = '{empresa}'
+            AND A.EMPRESA <> '139'
+            AND (
+                A.EMPRESA <> '139' 
+                OR (A.EMPRESA = '139' AND (B.GRUPO <> '3.1 - CUSTO SOBRE VENDAS TRANSITORIAS 321' OR A.CONTA = '3210180002'))
+            )
+            GROUP BY A.EMPRESA, A.CONTA;
+            """
+
+            df_empresa = pd.read_sql(
+                query_base_sumarizada_demonstrativo_cpv_PAC, conn)
+            df_list.append(df_empresa)  # Adiciona os resultados na lista
+
+        # Passo 3: Concatenar todos os DataFrames
+        df2 = pd.concat(df_list, ignore_index=True)
+
+        print(
+            f"{Fore.GREEN}Segunda query BASE PAC executada e armazenada no DataFrame!")
+
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao executar a segunda query de BASE PAC: {e}")
+
+    try:
+        # Passo 4: Unindo as duas consultas
+        df_final = pd.concat([df1, df2], ignore_index=True)
+
+        # Passo 5: Substituir a tabela final DEMONSTRATIVO_CPV2
+        df_final.to_sql("DEMONSTRATIVO_CPV2", conn,
+                        if_exists="replace", index=False)
+
+        print(f"{Fore.GREEN}Tabela DEMONSTRATIVO_CPV2 atualizada com sucesso!")
+
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao substituir a tabela DEMONSTRATIVO_CPV2: {e}")
 
 
 # Fechar a conexão
