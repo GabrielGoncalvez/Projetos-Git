@@ -9,13 +9,15 @@ import re
 import sys  # Importa o módulo sys para encerrar o script
 from openpyxl import load_workbook
 import cx_Oracle as oracle
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus as urlquote
 import numpy as np
 import glob
 import warnings
 from colorama import Fore, Style, init
 from sas7bdat import SAS7BDAT
+import xlsxwriter
+print('24/02')
 
 print("""
 -------------------->> CONTROLTECH <<--------------------
@@ -50,7 +52,15 @@ except Exception as e:
 # Variáveis de configuração
 variaveis_de_configuracao = {
     'DT_INI': '01/01/2024',  # DATA INICIAL DO PERÍODO DE ATUALIZAÇÃO
-    'DT_FIM': '31/01/2025'  # DATA FINAL DO PERÍODO DE ATUALIZAÇÃO
+    'DT_FIM': '01/01/2025'  # DATA FINAL DO PERÍODO DE ATUALIZAÇÃO
+}
+
+
+# Filtros para Extração (direto no formato correto)
+variaveis_para_extracao = {
+    'DT_INI_PARA_EXTRACAO': '2024-08-01',  # Data inicial no formato YYYY-MM-DD
+    'DT_FIM_PARA_EXTRACAO': '2025-08-13',   # Data final no formato YYYY-MM-DD
+    'EMPRESA_PARA_EXTRACAO': ['74', '139']
 }
 
 
@@ -82,16 +92,18 @@ variaveis_de_controle = {
     # CALCULOS COMPRAS CPV
     'calcula_compras_cpv': False,
     # DEMONSTRATIVO CPV
-    'Primeiro_Demonstrativo_CPV': False,
+    'Primeiro_Demonstrativo_CPV': True,
     'Segundo_Demonstrativo_CPV': True,
-    # BASES ANALITCAS
+    # BASES ANALITICAS
     'exporta_base_analitica': False,
+    'exporta_base_analitica_PAC': False,
+    'exporta_base_analitica_GRADES': False,
+    'exporta_base_analitica_RAZAO': False,
     # VALIDAÇÃO CMV
     'validacao_cmv': False,
     # SAS
     'importa_sas': False
 }
-# Ajuste de DATABASE para base PAC
 
 try:
     # Criar o DataFrame de mapeamento
@@ -121,8 +133,12 @@ pasta_banco_dados = os.path.join(
     '01- BANCO_CPV_SQLITE'
 )
 
-# Conecte-se ao banco de dados SQLite se não exister crie um novo
+# Conecte-se ao banco de dados SQLite se não exister crie um novoz/
 conn = sqlite3.connect(os.path.join(pasta_banco_dados, 'CPV.sqlite'))
+print(conn)
+
+# Define o NLS_LANG antes de criar a conexão
+os.environ["NLS_LANG"] = "BRAZILIAN PORTUGUESE_BRAZIL.AL32UTF8"
 
 # Configurações de conexão Oracle (TP215)
 TP215_db_user = 'APPSELECT'
@@ -133,9 +149,11 @@ TP215_db_host = 'TP215.ORACLEDB'
 TP215_dsn_tns = oracle.makedsn(
     TP215_db_host, TP215_db_port, service_name=TP215_db_name)
 
+
 # Cria a conexão com o Oracle usando SQLAlchemy
 conn_TP215 = create_engine(f"oracle+cx_oracle://{TP215_db_user}:%s@{
                            TP215_dsn_tns}" % urlquote(TP215_db_pass), arraysize=10000, pool_size=0)
+
 
 # Testa a conexão com o banco de dados Oracle
 try:
@@ -218,11 +236,11 @@ if variaveis_de_controle['importa_base_centro_ebs']:
 
         # Renomear a coluna 'CENTRO EBS' para 'CENTRO_EBS'
         df_centros_ebs.rename(
-            columns={'CENTRO EBS': 'CENTRO_EBS'}, inplace=False)
+            columns={'CENTRO EBS': 'CENTRO_EBS'}, inplace=True)
 
         # Insere os registros no banco de dados
         df_centros_ebs.to_sql('BASE_CENTROS_EBS', conn, if_exists='replace',
-                              index=False, dtype={'CENTRO': 'INTEGER'})
+                              index=True, dtype={'CENTRO': 'INTEGER'})
 
         print(f"{GREEN}Base de Centros EBS importada com sucesso!")
 
@@ -239,7 +257,7 @@ if variaveis_de_controle['lista_balancete_ebs']:
 
     print(f"{BLUE}Lista Balancete EBS")
 
-    # Caminho da rede dos arquivos estoque acabados
+   # Caminho da rede dos arquivos estoque acabados
     pasta_importar = os.path.join(
         os.path.expanduser('~'),
         'EDITORA E DISTRIBUIDORA EDUCACIONAL S A',
@@ -250,13 +268,19 @@ if variaveis_de_controle['lista_balancete_ebs']:
         '04 - Base Balancete EBS'
     )
 
+    # pasta_importar = os.path.join(
+    #         r'\\172.22.0.33',
+    #         'Controladoria',
+    #         '_Exercicio 2023',
+    #         '34 - Somos',
+    #         '3 - Bases Relatorio CPV',
+    #         '2. Base Grades',
+    #     )
+
     # Função para converter o período de mmm/yy para mm/yyyy
     def converter_periodo(periodo):
         return datetime.strptime(periodo, '%b/%y').strftime('%m/%Y')
-        # Função para converter o período de mmm/yy para mm/yyyy
 
-        def converter_periodo(periodo):
-            return datetime.strptime(periodo, '%b/%y').strftime('%m/%Y')
     # Lista para armazenar informações dos arquivos
     lista_balancete_ebs = pd.DataFrame(columns=[
                                        'caminho', 'nome_arquivo', 'tamanho_arquivo', 'data_modificacao', 'data_criacao', 'data_atualizacao', 'data_arquivo'])
@@ -305,6 +329,10 @@ if variaveis_de_controle['lista_balancete_ebs']:
 
 # Importa o Balancete EBS -- Importa os arquivos para tabela de balancete, que não tenha os memso MES_ANO já inseridos
 if variaveis_de_controle['importa_balancete_ebs']:
+
+    # Garante que a lista de balancetes seja carregada antes do uso
+    lista_balancete_ebs = pd.read_sql(
+        "SELECT * FROM LISTA_BALANCETE_EBS", conn)
 
     print(f"{BLUE}Importa Balancete EBS")
 
@@ -363,7 +391,7 @@ if variaveis_de_controle['importa_balancete_ebs']:
                 'Conta': 'CONTA',
                 'Saldo Final': 'SALDO_FINAL',
                 'Empresa': 'EMPRESA',
-                'Subconta': 'SUBCONTA'}, inplace=False)
+                'Subconta': 'SUBCONTA'}, inplace=True)
 
             # Adiciona campo CHAVE concatenando os campos CONTA e SUBCONTA
             df['CHAVE'] = df['CONTA'].astype(str) + df['SUBCONTA'].astype(str)
@@ -373,7 +401,7 @@ if variaveis_de_controle['importa_balancete_ebs']:
 
            # Remove caracteres não numéricos e espaços em branco da coluna 'EMPRESA'
             df['EMPRESA'] = df['EMPRESA'].str.replace(
-                r'\D', '', regex=False).str.strip()
+                r'\D', '', regex=True).str.strip()
 
             # Converte a coluna 'EMPRESA' para inteiro
             df['EMPRESA'] = df['EMPRESA'].astype(int)
@@ -430,7 +458,7 @@ if variaveis_de_controle['importa_razao_ebs']:
 
     # Query para extrair os dados do Oracle
     base_query = """
-                   SELECT o105514.EMPRESA
+                   LTRIM(o105514.EMPRESA, '0') AS EMPRESA
                     ,o105514.CONTA
                     ,o105514.SUBCONTA
                     ,o105514.DATA_BASE
@@ -612,7 +640,7 @@ if variaveis_de_controle['update_razao_ebs']:
     except Exception as e:
         print(f"{RED}Erro ao atualizar a coluna CLASSIFICACAO: {e}")
 
-# Importa a base de  --   Atualizando base PAC -- PELO ORACLE Insereindo dados por conta e empresa equivale as bases sas CPV_BI.PAC_ORIG - flow macro do sas
+# Importa a base de  --   Atualizando base PAC -- PELO ORACLE Inseindo dados por conta e empresa equivale as bases sas CPV_BI.PAC_ORIG - flow macro do sas
 if variaveis_de_controle['importa_base_pac']:
 
     print(f"{BLUE}Importa Base PAC")
@@ -752,8 +780,9 @@ if variaveis_de_controle['calcula_cpv']:
     print(f"{BLUE}Criando a tabela BASE_CALCULO_CPV")
 
     try:
-        # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE GRADES
-        query_base_calculo_cpv = """
+        # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE
+        print(f"{BLUE}Salvando DF com a Base Grades")
+        query_base_Calculo_CPV_Base_Grades = """
         SELECT DISTINCT
             strftime('%d%m%Y', DATA_BASE) AS DATA_BASE,
             A.EMPRESA,
@@ -768,23 +797,17 @@ if variaveis_de_controle['calcula_cpv']:
         AND FONTE <> 'BASE_RAZAO'
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
         """
-        # Executar a query e armazenar os resultados em um DataFrame
-        df = pd.read_sql(query_base_calculo_cpv, conn)
-
-        # Criar ou atualizar a tabela
-        df.to_sql("BASE_CALCULO_CPV", conn, if_exists="replace", index=False)
-
-        print(f"{GREEN}Tabela BASE_CALCULO_CPV atualizada com sucesso!")
-
+        # Executar a query e armazenar os resultados do calculo cpv base grades
+        df_Calculo_CPV_Base_Grades = pd.read_sql(
+            query_base_Calculo_CPV_Base_Grades, conn)
+        print(f"{GREEN}DF Calculo_Cpv_Base_Grades criada com sucesso!")
     except Exception as e:
-        print(f"{RED}Erro ao criar a tabela BASE_CALCULO_CPV: {e}")
-
-    print(f"{BLUE}Atualizando base de CPV com dados da base RAZAO")
+        print(f"{RED}Erro ao criar DF Calculo_Cpv_Base_Grades: {e}")
 
     try:
-        # Atualizando a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE RAZAO
-        query_insert_base_calculo_cpv_RAZAO = """
-        INSERT INTO BASE_CALCULO_CPV (DATA_BASE, EMPRESA, CONTA, FONTE, CALCULO, VALOR)
+        # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA RAZAO
+        print(f"{BLUE}Salvando DF com a Base Razao")
+        query_base_Calculo_CPV_Base_Razao = """
         SELECT 
             DATA_BASE,
             EMPRESA,
@@ -888,32 +911,31 @@ if variaveis_de_controle['calcula_cpv']:
         AND CONTA = 1149901001
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
         """
-        # Executar a query de inserção
-        conn.execute(query_insert_base_calculo_cpv_RAZAO)
-        conn.commit()
-
-        print(
-            f"{GREEN}Dados inseridos na tabela BASE_CALCULO_CPV com dados da RAZAO EBS com sucesso!")
+        # Executar a query e armazenar os resultados do calculo cpv base grades
+        df_Calculo_CPV_Base_Razao = pd.read_sql(
+            query_base_Calculo_CPV_Base_Razao, conn)
+        print(f"{GREEN}DF Calculo_Cpv_Base_Razao criada com sucesso!")
     except Exception as e:
-        print(
-            f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV com dados da RAZAO: {e}")
-
-    # INSERT BASE CALCULO CPV COM DADOS DA BASE PAC
-    print(f"{BLUE}INSERINDO DADOS BASE PAC NA TABELA BASE CALCULO CPV")
+        print(f"{RED}Erro ao criar a DF Calculo_Cpv_Base_Razap: {e}")
 
     try:
+        # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA PAC
+        print(f"{BLUE}Salvando DF com a Base PAC")
+
         # Obter a lista de empresas
         query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
         empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
 
+        # Criar lista para armazenar os DataFrames do FOR
+        df_list_pac_cpv = []
+
         for empresa in empresas:
-            # Criar a query para inserir os dados na tabela BASE_CALCULO_CPV
-            query_insert_base_calculo_cpv_PAC = f"""
-            INSERT INTO BASE_CALCULO_CPV (DATA_BASE, EMPRESA, CONTA, FONTE, CALCULO, VALOR)
+            # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA PAC
+            query_base_Calculo_CPV_Base_Pac = f"""
             SELECT DISTINCT
                 {data_base_conversion},
-                A.EMPRESA,
-                A.CONTA,
+                A.EMPRESA as 'EMPRESA',
+                A.CONTA as 'CONTA',
                 'BASE_PAC' AS FONTE,
                 'Entradas de NFs' AS CALCULO,
                 ROUND(SUM(vlr_transacao), 2) AS VALOR
@@ -929,8 +951,8 @@ if variaveis_de_controle['calcula_cpv']:
 
             SELECT DISTINCT
                 {data_base_conversion},
-                A.EMPRESA,
-                A.CONTA,
+                A.EMPRESA as 'EMPRESA',
+                A.CONTA as 'CONTA',
                 'BASE_PAC' AS FONTE,
                 'Entradas de NFs Serviços' AS CALCULO,
                 ROUND(SUM(vlr_transacao), 2) AS VALOR
@@ -946,8 +968,8 @@ if variaveis_de_controle['calcula_cpv']:
 
             SELECT DISTINCT
                 {data_base_conversion},
-                A.EMPRESA,
-                A.CONTA,
+                A.EMPRESA as 'EMPRESA',
+                A.CONTA as 'CONTA',
                 'BASE_PAC' AS FONTE,
                 'Entrada Custo Folha MO' AS CALCULO,
                 ROUND(SUM(vlr_transacao), 2) AS VALOR
@@ -961,27 +983,52 @@ if variaveis_de_controle['calcula_cpv']:
             """
 
             # Executar a query
-            cursor = conn.cursor()
-            cursor.execute(query_insert_base_calculo_cpv_PAC)
-            conn.commit()
-
+            df_empresa_pac = pd.read_sql(query_base_Calculo_CPV_Base_Pac, conn)
+            # Adiciona os resultados na lista
+            df_list_pac_cpv.append(df_empresa_pac)
             print(
-                f"{GREEN}Dados da empresa {empresa} inseridos com sucesso na tabela BASE_CALCULO_CPV!")
+                f"{GREEN}Dados PAC da empresa {empresa} inseridos com sucesso no DF LIST PAC CPV")
+
+        # Filtrar DataFrames vazios antes de concatenar
+        df_list_pac_cpv = [df for df in df_list_pac_cpv if not df.empty]
+
+        # Armazenando o for da PAC em um único DataFrame
+        if df_list_pac_cpv:
+            df_Calculo_CPV_Base_PAC = pd.concat(
+                df_list_pac_cpv, ignore_index=True)
+            print(f"{Fore.GREEN}DF CALCULO_CPV_BASE_PAC criada com sucesso!")
+        else:
+            df_Calculo_CPV_Base_PAC = pd.DataFrame()
+            print(
+                f"{Fore.RED}Nenhum dado encontrado para criar DF CALCULO_CPV_BASE_PAC.")
 
     except Exception as e:
         print(f"{RED}Erro ao inserir dados na tabela BASE_CALCULO_CPV: {e}")
 
-    # Extraindo base CALCULO CPV
     try:
-        df_base_calculo_cpv = pd.read_sql_query(
-            "SELECT * FROM BASE_CALCULO_CPV", conn)
-        caminho_arquivo_xlsx = os.path.join(
-            pasta_banco_dados, 'BASE_CALCULO_CPV.xlsx')
-        df_base_calculo_cpv.to_excel(caminho_arquivo_xlsx, index=False)
-        print(
-            f"{GREEN}Tabela BASE_CALCULO_CPV exportada com sucesso para {caminho_arquivo_xlsx}")
+        # Unindo as três consultas
+        df_final = pd.concat([df_Calculo_CPV_Base_Grades, df_Calculo_CPV_Base_Razao,
+                              df_Calculo_CPV_Base_PAC], ignore_index=True)
+
+        # Substituir a tabela final BASE_CALCULO_CPV
+        df_final.to_sql("BASE_CALCULO_CPV", conn,
+                        if_exists="replace", index=False)
+        print(f"{Fore.GREEN}Tabela BASE_CALCULO_CPV atualizada com sucesso!")
+
     except Exception as e:
-        print(f"{RED}Erro ao exportar a tabela BASE_CALCULO_CPV: {e}")
+        print(f"{Fore.RED}Erro ao substituir a tabela BASE_CALCULO_CPV: {e}")
+
+        # Extraindo base CALCULO CPV
+        try:
+            df_base_calculo_cpv = pd.read_sql_query(
+                "SELECT * FROM BASE_CALCULO_CPV", conn)
+            caminho_arquivo_xlsx = os.path.join(
+                pasta_banco_dados, 'BASE_CALCULO_CPV.xlsx')
+            df_base_calculo_cpv.to_excel(caminho_arquivo_xlsx, index=False)
+            print(
+                f"{GREEN}Tabela BASE_CALCULO_CPV exportada com sucesso para {caminho_arquivo_xlsx}")
+        except Exception as e:
+            print(f"{RED}Erro ao exportar a tabela BASE_CALCULO_CPV: {e}")
 
 # CRIA TABELA PAC POR EMPRESA
 if variaveis_de_controle['calcula_compras_pac']:
@@ -1164,7 +1211,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         # Query para criar a tabela BASE_CALCULO_CPV COM OS DADOS DA BASE GRADES
         query_base_demonstrativo_cpv = """
             SELECT DISTINCT
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA AS EMPRESA,
             A.CONTA,
             'BASE_GRADES' AS FONTE,
@@ -1180,7 +1227,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT DISTINCT
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA AS EMPRESA,
             A.CONTA,
             'BASE_GRADES' AS FONTE,
@@ -1193,9 +1240,24 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
 
         UNION ALL
+        
+        SELECT DISTINCT
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
+            EMPRESA AS EMPRESA,
+            A.CONTA,
+            'BASE_GRADES' AS FONTE,
+            'Saldo Grade' AS COLUNA,
+            ROUND(SUM(SALDO_FINAL), 2) AS VALOR
+        FROM BALANCETE_EBS A
+        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+        WHERE SALDO_FINAL <> 0
+        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
+
+        UNION ALL
+        
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1210,7 +1272,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1225,7 +1287,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1234,16 +1296,16 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         FROM RAZAO_EBS A
         INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
         WHERE CLASSIFICACAO = 'COMPRAS'
-        AND ORIGEM = 'CLL F189 INTEGRATED RCV'
+        AND REPLACE(ORIGEM, ' ', '') = REPLACE('CLL F189 INTEGRATED RCV', ' ', '')
         AND A.EMPRESA = '139'
         AND A.CONTA <> 3210180002
-        AND B.GRUPO = '3.1 - CUSTO SOBRE VENDAS TRANSITORIAS 321'
+        AND REPLACE(B.GRUPO, ' ', '') = REPLACE('3.1 - CUSTO SOBRE VENDAS TRANSITORIAS 321', ' ', '')
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
 
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1257,7 +1319,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1271,7 +1333,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1286,22 +1348,8 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
 
         UNION ALL
 
-        SELECT DISTINCT
-            DATA_BASE,
-            EMPRESA,
-            A.CONTA,
-            'BASE_GRADES' AS FONTE,
-            'Saldo Grade' AS COLUNA,
-            ROUND(SUM(SALDO_FINAL), 2) AS VALOR
-        FROM BALANCETE_EBS A
-        INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
-        WHERE SALDO_FINAL <> 0
-        GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
-
-        UNION ALL
-
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1310,7 +1358,12 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         FROM RAZAO_EBS A
         INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
         WHERE CLASSIFICACAO IN ('SERVIÇOS')
-        AND LANCAMENTO IN ('72158174 NFFs de Compra BRL', '72158175 NFFs de Compra BRL', '72186532 NFFs de Compra BRL', '72668678 NFFs de Compra BRL', '72487479 NFFs de Compra BRL')
+        AND REPLACE(LANCAMENTO, ' ', '') IN (
+        REPLACE('72158174 NFFs de Compra BRL', ' ', ''), 
+        REPLACE('72158175 NFFs de Compra BRL', ' ', ''), 
+        REPLACE('72186532 NFFs de Compra BRL', ' ', ''), 
+        REPLACE('72668678 NFFs de Compra BRL', ' ', ''), 
+        REPLACE('72487479 NFFs de Compra BRL', ' ', ''))
         AND A.CONTA IN (1140101982)
         AND A.EMPRESA = '139'
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
@@ -1318,7 +1371,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1327,7 +1380,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         FROM RAZAO_EBS A
         INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
         WHERE CLASSIFICACAO IN ('PAC')
-        AND HISTORICO = '819901-ITEM DOC 877-GLOBAL TECH RESOURCES LTDA EPP; 243070-SENSOR DE TEMPERATURA I12'
+        AND REPLACE(HISTORICO, ' ', '') = REPLACE('819901-ITEM DOC 877-GLOBAL TECH RESOURCES LTDA  EPP; 243070-SENSOR DE TEMPERATURA I12', ' ', '')
         AND A.CONTA IN (1140101982)
         AND EMPRESA = '139'
         GROUP BY A.DATA_BASE, A.EMPRESA, A.CONTA
@@ -1335,7 +1388,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1351,7 +1404,7 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
         UNION ALL
 
         SELECT 
-            DATA_BASE,
+            strftime('%d/%m/%Y', DATA_BASE) AS DATA_BASE,
             EMPRESA,
             A.CONTA,
             'BASE_RAZAO' AS FONTE,
@@ -1385,13 +1438,21 @@ if variaveis_de_controle['Primeiro_Demonstrativo_CPV']:
 
         # CRIA BASE SUMARIZADA DO DEMONSTRATIVO CPV
 
+# CRIA BASE SUMARIZADA DO DEMONSTRATIVO CPV
 if variaveis_de_controle['Segundo_Demonstrativo_CPV']:
     print(f"{Fore.BLUE}Gerando 2° Demonstrativo CPV")
 
     try:
         # Passo 1:Base Demontrativo CPV_2, FONTE: RBS+BALANCETE
         query_base_sumarizada_demonstrativo_cpv = """
-        SELECT * FROM DEMONSTRATIVO_CPV
+        SELECT DISTINCT
+        DATA_BASE,
+        EMPRESA,
+        CONTA,
+        FONTE,
+        COLUNA,
+        VALOR
+        FROM DEMONSTRATIVO_CPV
         UNION ALL
         SELECT DISTINCT
         DATA_BASE,
@@ -1511,32 +1572,378 @@ if variaveis_de_controle['Segundo_Demonstrativo_CPV']:
             )
             GROUP BY A.EMPRESA, A.CONTA;
             """
-
+            # Executar a query
             df_empresa = pd.read_sql(
                 query_base_sumarizada_demonstrativo_cpv_PAC, conn)
+            # Adiciona os resultados na lista
             df_list.append(df_empresa)  # Adiciona os resultados na lista
+            print(
+                f"{GREEN}Dados PAC da empresa {empresa} inseridos com sucesso no DF DEMONSTRATIVO LIST PAC CPV")
 
-        # Passo 3: Concatenar todos os DataFrames
-        df2 = pd.concat(df_list, ignore_index=True)
+        # Filtrar DataFrames vazios antes de concatenar
+        df_list = [df for df in df_list if not df.empty]
 
-        print(
-            f"{Fore.GREEN}Segunda query BASE PAC executada e armazenada no DataFrame!")
+        # Armazenando o for da PAC em um único DataFrame
+        if df_list:
+            df2 = pd.concat(
+                df_list, ignore_index=True)
+            print(f"{Fore.GREEN}DF DEMONSTRATIVO PAC criada com sucesso!")
+        else:
+            df2 = pd.DataFrame()
+            print(
+                f"{Fore.RED}Nenhum dado encontrado para criar DF DEMONSTRATIVO.")
 
     except Exception as e:
-        print(f"{Fore.RED}Erro ao executar a segunda query de BASE PAC: {e}")
+        print(f"{RED}Erro ao inserir dados no DF do PAC: {e}")
 
     try:
-        # Passo 4: Unindo as duas consultas
-        df_final = pd.concat([df1, df2], ignore_index=True)
+        # Unindo as duas consultas
+        df_final_demonstrativo = pd.concat([df1, df2], ignore_index=True)
 
-        # Passo 5: Substituir a tabela final DEMONSTRATIVO_CPV2
-        df_final.to_sql("DEMONSTRATIVO_CPV2", conn,
-                        if_exists="replace", index=False)
-
+        # Substituir a tabela final BASE_DEMONSTRATIVO
+        df_final_demonstrativo.to_sql("DEMONSTRATIVO_CPV2", conn,
+                                      if_exists="replace", index=False)
         print(f"{Fore.GREEN}Tabela DEMONSTRATIVO_CPV2 atualizada com sucesso!")
 
     except Exception as e:
         print(f"{Fore.RED}Erro ao substituir a tabela DEMONSTRATIVO_CPV2: {e}")
+
+    # Extraindo bas DEMONSTRATIVO_CPV
+    try:
+        df_base_calculo_cpv = pd.read_sql_query(
+            "SELECT * FROM DEMONSTRATIVO_CPV2", conn)
+        caminho_arquivo_xlsx = os.path.join(
+            pasta_banco_dados, 'DEMONSTRATIVO_CPV2.xlsx')
+        df_base_calculo_cpv.to_excel(caminho_arquivo_xlsx, index=False)
+        print(
+            f"{GREEN}Tabela DEMONSTRATIVO_CPV2 exportada com sucesso para {caminho_arquivo_xlsx}")
+    except Exception as e:
+        print(f"{RED}Erro ao exportar a tabela DEMONSTRATIVO_CPV2: {e}")
+
+# Exporta base analítica PAC
+if variaveis_de_controle['exporta_base_analitica_PAC']:
+    print(f"{Fore.BLUE}Atualizando BASE_ANALITICA_PAC_POR_EMPRESA")
+    try:
+        # Armazenando filtros para extração
+        dt_ini_para_extracao = variaveis_para_extracao['DT_INI_PARA_EXTRACAO']
+        dt_fim_para_extracao = variaveis_para_extracao['DT_FIM_PARA_EXTRACAO']
+        empresas_para_extracao = variaveis_para_extracao['EMPRESA_PARA_EXTRACAO']
+
+        # Caminho para extrair arquivos pac
+        arquivos_analitico_pac = os.path.join(
+            os.path.expanduser('~'),
+            'OneDrive - EDITORA E DISTRIBUIDORA EDUCACIONAL S A',
+            '02- CONTROLADORIA',
+            'RA - CPV',
+            'PAC')
+
+        # Adicionar a barra de progresso
+        with alive_bar(len(empresas_para_extracao)) as bar:
+            for empresa in empresas_para_extracao:
+                try:
+                    # Query para obter os dados
+                    query_base_analitica_pac_empresa = f""" 
+                    SELECT A.*,
+                        B.GRUPO,
+                        CASE 
+                            WHEN FONTE = 'BASE PAC' THEN 'Base PAC'
+                            WHEN FONTE = 'BASE ELAB' THEN 'Base Elaboração'
+                            WHEN FONTE IN ('BASE COMPRAS', 'BASE COMPRAS APROPR') THEN 'Compras'
+                        END AS COLUNA_CPV   
+                    FROM BASE_PAC A
+                    INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+                    WHERE A.VLR_TRANSACAO <> 0
+                    AND A.EMPRESA = '{empresa}'
+                    AND DATE(DATA_TRANSACAO) BETWEEN '{dt_ini_para_extracao}' AND '{dt_fim_para_extracao}'
+                    AND FONTE IN ('BASE PAC', 'BASE ELAB', 'BASE COMPRAS', 'BASE COMPRAS APROPR') 
+                    """
+
+                    # Ler os dados em um DataFrame
+                    df_analitica_pac_empresa = pd.read_sql(
+                        query_base_analitica_pac_empresa, conn)
+
+                    # Adicionar a coluna de ID sequencial
+                    df_analitica_pac_empresa['ID'] = pd.Series(
+                        range(1, len(df_analitica_pac_empresa) + 1))
+
+                    # Verificar se a coluna PERIODO existe
+                    if 'periodo' in df_analitica_pac_empresa.columns:
+                        periodos_distintos = df_analitica_pac_empresa['periodo'].unique(
+                        )
+
+                        for periodo in periodos_distintos:
+                            df_periodo = df_analitica_pac_empresa[df_analitica_pac_empresa['periodo'] == periodo]
+
+                            # Dividir o DataFrame em partes menores
+                            num_chunks = (len(df_periodo) // 1_000_000) + 1
+
+                            for i in range(num_chunks):
+                                inicio = i * 1_000_000
+                                fim = inicio + 1_000_000
+                                # <-- ADICIONADO .copy() PARA EVITAR WARNINGS
+                                df_chunk = df_periodo.iloc[inicio:fim].copy()
+
+                                if not df_chunk.empty:
+                                    # Criar nome do arquivo com numeração (_1, _2, etc.)
+                                    file_name = f"BASE_ANALITICA_PAC_{empresa}_{periodo}_{i+1}.xlsx"
+                                    file_path = os.path.join(
+                                        arquivos_analitico_pac, file_name)
+
+                                    # Salvar cada pedaço no Excel
+                                    with pd.ExcelWriter(file_path, engine='xlsxwriter') as writer:
+                                        df_chunk.to_excel(
+                                            writer, sheet_name='Dados', index=False)
+
+                                    print(
+                                        f"{Fore.GREEN}Arquivo {file_name} salvo com sucesso!")
+                    else:
+                        print(
+                            f"{Fore.RED}A coluna PERIODO não existe na consulta para a empresa {empresa}.")
+                except Exception as e:
+                    print(
+                        f"{Fore.RED}Erro ao exportar a BASE_ANALITICA_PAC_{empresa}: {e}")
+                bar()
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao executar a atualização: {e}")
+
+# Exporta base analitica GRADES
+if variaveis_de_controle['exporta_base_analitica_GRADES']:
+    print(f"{Fore.BLUE}Atualizando BASE_ANALITICA_GRADES")
+    try:
+
+        # Armazenando filtros para extração
+        dt_ini_para_extracao = variaveis_para_extracao['DT_INI_PARA_EXTRACAO']
+        dt_fim_para_extracao = variaveis_para_extracao['DT_FIM_PARA_EXTRACAO']
+        empresas_para_extracao = variaveis_para_extracao['EMPRESA_PARA_EXTRACAO']
+        print(
+            f"Período de extração: {dt_ini_para_extracao} a {dt_fim_para_extracao}")
+        print(f"Empresas para extração: {empresas_para_extracao}")
+
+        # Caminho para extrair arquivos GRADES
+        arquivos_analitico_GRADES = os.path.join(
+            os.path.expanduser('~'),
+            'OneDrive - EDITORA E DISTRIBUIDORA EDUCACIONAL S A',
+            '02- CONTROLADORIA',
+            'RA - CPV',
+            'GRADES')
+        print(f"Caminho para salvar arquivos: {arquivos_analitico_GRADES}")
+
+        # Adicionar a barra de progresso
+        with alive_bar(len(empresas_para_extracao)) as bar:
+            for empresa in empresas_para_extracao:
+                try:
+                    print(f"Processando empresa: {empresa}")
+                    # Cria a tabela BASE_ANALITICA_GRADES_EMPRESAS
+                    query_base_analitica_grades = f"""
+                    SELECT A.*, B.GRUPO, 'BASE_GRADES' AS FONTE, 'SALDO GRADE' AS COLUNA_CPV,
+                    CASE
+                        WHEN substr(Período, 6, 2) = '01' THEN 'JAN'
+                        WHEN substr(Período, 6, 2) = '02' THEN 'FEV'
+                        WHEN substr(Período, 6, 2) = '03' THEN 'MAR'
+                        WHEN substr(Período, 6, 2) = '04' THEN 'ABR'
+                        WHEN substr(Período, 6, 2) = '05' THEN 'MAI'
+                        WHEN substr(Período, 6, 2) = '06' THEN 'JUN'
+                        WHEN substr(Período, 6, 2) = '07' THEN 'JUL'
+                        WHEN substr(Período, 6, 2) = '08' THEN 'AGO'
+                        WHEN substr(Período, 6, 2) = '09' THEN 'SET'
+                        WHEN substr(Período, 6, 2) = '10' THEN 'OUT'
+                        WHEN substr(Período, 6, 2) = '11' THEN 'NOV'
+                        WHEN substr(Período, 6, 2) = '12' THEN 'DEZ'
+                    END || '-' || substr(Período, 3, 2) AS PERIODO_FORMATADO
+                    FROM BALANCETE_EBS A
+                    INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+                    WHERE SALDO_FINAL <> 0
+                    AND A.EMPRESA = '{empresa}'
+                    AND DATE(Período) BETWEEN '{dt_ini_para_extracao}' AND '{dt_fim_para_extracao}'
+                    """
+                    print(f"Executando query para empresa {empresa}")
+                    # Executar a query e armazenar os resultados da base analítica grades
+                    df_analitica_grades_empresa = pd.read_sql(
+                        query_base_analitica_grades, conn)
+                    print(
+                        f"Query executada com sucesso para empresa {empresa}")
+
+                    # Adicionar a coluna de ID sequencial
+                    df_analitica_grades_empresa['ID'] = pd.Series(
+                        range(1, len(df_analitica_grades_empresa) + 1))
+
+                    # Verificar se a coluna Período existe
+                    if 'PERIODO_FORMATADO' in df_analitica_grades_empresa.columns:
+                        # Obter os períodos distintos
+                        periodos_distintos = df_analitica_grades_empresa['PERIODO_FORMATADO'].unique(
+                        )
+                        print(
+                            f"Períodos distintos encontrados para empresa {empresa}: {periodos_distintos}")
+
+                        for periodo in periodos_distintos:
+                            # Filtrar o DataFrame para o período atual
+                            df_periodo = df_analitica_grades_empresa[
+                                df_analitica_grades_empresa['PERIODO_FORMATADO'] == periodo]
+
+                            # Definir o nome do arquivo
+                            file_name = f"BASE_ANALITICA_GRADES_{empresa}_{periodo}.xlsx"
+                            file_path = os.path.join(
+                                arquivos_analitico_GRADES, file_name)
+
+                            # Salvar o DataFrame em um arquivo Excel
+                            df_periodo.to_excel(file_path, index=False)
+                            print(
+                                f"{Fore.GREEN}Arquivo {file_name} salvo com sucesso!")
+                    else:
+                        print(
+                            f"{Fore.RED}A coluna PERIODO não existe na consulta para a empresa {empresa}.")
+                except Exception as e:
+                    print(
+                        f"{Fore.RED}Erro ao exportar a BASE_ANALITICA_GRADES_{empresa}: {e}")
+                # Atualizar a barra de progresso
+                bar()
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao executar a atualização: {e}")
+
+# Exporta base analiica RAZAO
+if variaveis_de_controle['exporta_base_analitica_RAZAO']:
+    print(f"{Fore.BLUE}Atualizando BASE_ANALITICA_RAZAO")
+    try:
+        # Pegando lista de Empresas
+        query_empresas = "SELECT DISTINCT EMPRESA FROM DEPARA_EMPRESAS"
+        empresas = pd.read_sql(query_empresas, conn)['EMPRESA'].tolist()
+        print(f"Empresas encontradas: {empresas}")
+
+        # Armazenando filtros para extração
+        dt_ini_para_extracao = variaveis_para_extracao['DT_INI_PARA_EXTRACAO']
+        dt_fim_para_extracao = variaveis_para_extracao['DT_FIM_PARA_EXTRACAO']
+        empresas_para_extracao = variaveis_para_extracao['EMPRESA_PARA_EXTRACAO']
+        print(
+            f"Período de extração: {dt_ini_para_extracao} a {dt_fim_para_extracao}")
+        print(f"Empresas para extração: {empresas_para_extracao}")
+
+        # Caminho para extrair arquivos RAZAO
+        arquivos_analitico_razao = os.path.join(
+            os.path.expanduser('~'),
+            'OneDrive - EDITORA E DISTRIBUIDORA EDUCACIONAL S A',
+            '02- CONTROLADORIA',
+            'RA - CPV',
+            'RAZAO')
+        print(f"Caminho para salvar arquivos: {arquivos_analitico_razao}")
+
+        # Adicionar a barra de progresso
+        with alive_bar(len(empresas_para_extracao)) as bar:
+            for empresa in empresas_para_extracao:
+                try:
+                    print(f"Processando empresa: {empresa}")
+                    # Cria a tabela BASE_ANALITICA_RAZAO_EMPRESAS
+                    query_base_analitica_razao = f"""
+                    SELECT A.*, B.GRUPO, 'BASE_RAZAO' AS FONTE, A.CLASSIFICACAO AS "COLUNA_CPV",
+                    CASE
+                        WHEN substr(DATA_BASE, 6, 2) = '01' THEN 'JAN'
+                        WHEN substr(DATA_BASE, 6, 2) = '02' THEN 'FEV'
+                        WHEN substr(DATA_BASE, 6, 2) = '03' THEN 'MAR'
+                        WHEN substr(DATA_BASE, 6, 2) = '04' THEN 'ABR'
+                        WHEN substr(DATA_BASE, 6, 2) = '05' THEN 'MAI'
+                        WHEN substr(DATA_BASE, 6, 2) = '06' THEN 'JUN'
+                        WHEN substr(DATA_BASE, 6, 2) = '07' THEN 'JUL'
+                        WHEN substr(DATA_BASE, 6, 2) = '08' THEN 'AGO'
+                        WHEN substr(DATA_BASE, 6, 2) = '09' THEN 'SET'
+                        WHEN substr(DATA_BASE, 6, 2) = '10' THEN 'OUT'
+                        WHEN substr(DATA_BASE, 6, 2) = '11' THEN 'NOV'
+                        WHEN substr(DATA_BASE, 6, 2) = '12' THEN 'DEZ'
+                    END || '-' || substr(DATA_BASE, 3, 2) AS PERIODO_FORMATADO
+                    FROM RAZAO_EBS A
+                    INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+                    WHERE A.CLASSIFICACAO  IN ('Reclassificações/Outros')
+                    AND A.EMPRESA = '{empresa}'
+                    AND DATE(DATA_BASE) BETWEEN '{dt_ini_para_extracao}' AND  '{dt_fim_para_extracao}'
+                    UNION
+                    SELECT A.*, B.GRUPO, 'BASE_RAZAO' AS FONTE, A.CLASSIFICACAO AS "COLUNA_CPV",
+                                        CASE
+                        WHEN substr(DATA_BASE, 6, 2) = '01' THEN 'JAN'
+                        WHEN substr(DATA_BASE, 6, 2) = '02' THEN 'FEV'
+                        WHEN substr(DATA_BASE, 6, 2) = '03' THEN 'MAR'
+                        WHEN substr(DATA_BASE, 6, 2) = '04' THEN 'ABR'
+                        WHEN substr(DATA_BASE, 6, 2) = '05' THEN 'MAI'
+                        WHEN substr(DATA_BASE, 6, 2) = '06' THEN 'JUN'
+                        WHEN substr(DATA_BASE, 6, 2) = '07' THEN 'JUL'
+                        WHEN substr(DATA_BASE, 6, 2) = '08' THEN 'AGO'
+                        WHEN substr(DATA_BASE, 6, 2) = '09' THEN 'SET'
+                        WHEN substr(DATA_BASE, 6, 2) = '10' THEN 'OUT'
+                        WHEN substr(DATA_BASE, 6, 2) = '11' THEN 'NOV'
+                        WHEN substr(DATA_BASE, 6, 2) = '12' THEN 'DEZ'
+                    END || '-' || substr(DATA_BASE, 3, 2) AS PERIODO_FORMATADO
+                    FROM RAZAO_EBS A
+                    INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+                    WHERE A.CLASSIFICACAO  IN ('PAC')
+                    AND LANCAMENTO = 'PAC - VARIACAO BRL'
+                    AND A.EMPRESA = '{empresa}'
+                    AND A.CONTA IN (1140201004)
+                    AND DATE(DATA_BASE) BETWEEN '{dt_ini_para_extracao}' AND  '{dt_fim_para_extracao}'
+                    UNION
+                    SELECT A.*, B.GRUPO, 'BASE_RAZAO' AS FONTE, A.CLASSIFICACAO AS "COLUNA_CPV",
+                    CASE
+                        WHEN substr(DATA_BASE, 6, 2) = '01' THEN 'JAN'
+                        WHEN substr(DATA_BASE, 6, 2) = '02' THEN 'FEV'
+                        WHEN substr(DATA_BASE, 6, 2) = '03' THEN 'MAR'
+                        WHEN substr(DATA_BASE, 6, 2) = '04' THEN 'ABR'
+                        WHEN substr(DATA_BASE, 6, 2) = '05' THEN 'MAI'
+                        WHEN substr(DATA_BASE, 6, 2) = '06' THEN 'JUN'
+                        WHEN substr(DATA_BASE, 6, 2) = '07' THEN 'JUL'
+                        WHEN substr(DATA_BASE, 6, 2) = '08' THEN 'AGO'
+                        WHEN substr(DATA_BASE, 6, 2) = '09' THEN 'SET'
+                        WHEN substr(DATA_BASE, 6, 2) = '10' THEN 'OUT'
+                        WHEN substr(DATA_BASE, 6, 2) = '11' THEN 'NOV'
+                        WHEN substr(DATA_BASE, 6, 2) = '12' THEN 'DEZ'
+                    END || '-' || substr(DATA_BASE, 3, 2) AS PERIODO_FORMATADO
+                    FROM RAZAO_EBS A
+                    INNER JOIN DEPARA_CONTA B ON A.CONTA = B.CONTA
+                    WHERE A.HISTORICO LIKE ('%TRANSF.P/ELAB. - Editorial Intercompany - CL_%')
+                    AND LANCAMENTO = 'PAC - VARIACAO BRL'
+                    AND A.EMPRESA = '{empresa}'
+                    AND A.CONTA IN (3210180995)
+                    AND EMPRESA = '139'
+                    AND DATE(DATA_BASE) BETWEEN '{dt_ini_para_extracao}' AND  '{dt_fim_para_extracao}'
+                    """
+                    print(f"Executando query para empresa {empresa}")
+                    # Executar a query e armazenar os resultados da base analítica grades
+                    df_analitica_razao_empresa = pd.read_sql(
+                        query_base_analitica_razao, conn)
+                    print(
+                        f"Query executada com sucesso para empresa {empresa}")
+
+                    # Adicionar a coluna de ID sequencial
+                    df_analitica_razao_empresa['ID'] = pd.Series(
+                        range(1, len(df_analitica_razao_empresa) + 1))
+
+                    # Verificar se a coluna Período existe
+                    if 'PERIODO_FORMATADO' in df_analitica_razao_empresa.columns:
+                        # Obter os períodos distintos
+                        periodos_distintos = df_analitica_razao_empresa['PERIODO_FORMATADO'].unique(
+                        )
+                        print(
+                            f"Períodos distintos encontrados para empresa {empresa}: {periodos_distintos}")
+
+                        for periodo in periodos_distintos:
+                            # Filtrar o DataFrame para o período atual
+                            df_periodo = df_analitica_razao_empresa[
+                                df_analitica_razao_empresa['PERIODO_FORMATADO'] == periodo]
+
+                            # Definir o nome do arquivo
+                            file_name = f"BASE_ANALITICA_RAZAO_{empresa}_{periodo}.xlsx"
+                            file_path = os.path.join(
+                                arquivos_analitico_razao, file_name)
+
+                            # Salvar o DataFrame em um arquivo Excel
+                            df_periodo.to_excel(file_path, index=False)
+                            print(
+                                f"{Fore.GREEN}Arquivo {file_name} salvo com sucesso!")
+                    else:
+                        print(
+                            f"{Fore.RED}A coluna PERIODO não existe na consulta para a empresa {empresa}.")
+                except Exception as e:
+                    print(
+                        f"{Fore.RED}Erro ao exportar a BASE_ANALITICA_RAZAO_{empresa}: {e}")
+                # Atualizar a barra de progresso
+                bar()
+    except Exception as e:
+        print(f"{Fore.RED}Erro ao executar a atualização: {e}")
 
 
 # Fechar a conexão
