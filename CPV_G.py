@@ -17,7 +17,7 @@ import warnings
 from colorama import Fore, Style, init
 from sas7bdat import SAS7BDAT
 import xlsxwriter
-print('24/02')
+print('26/02-v3')
 
 print("""
 -------------------->> CONTROLTECH <<--------------------
@@ -29,6 +29,7 @@ DATA DE CRIAÇÃO: 2025.05
 RED = "\033[31m"
 GREEN = "\033[32m"
 BLUE = "\033[34m"
+WHITE = "\033[37m"
 
 # Registrar o tempo de início
 start_time = time.time()
@@ -52,7 +53,7 @@ except Exception as e:
 # Variáveis de configuração
 variaveis_de_configuracao = {
     'DT_INI': '01/01/2024',  # DATA INICIAL DO PERÍODO DE ATUALIZAÇÃO
-    'DT_FIM': '01/01/2025'  # DATA FINAL DO PERÍODO DE ATUALIZAÇÃO
+    'DT_FIM': '31/01/2025'  # DATA FINAL DO PERÍODO DE ATUALIZAÇÃO
 }
 
 
@@ -84,7 +85,8 @@ variaveis_de_controle = {
     'update_razao_ebs': False,
     # BASE PAC
     'importa_base_pac': False,
-    'ajuste_manual_pac': False,
+    'update_base_pac': True,
+    'ajuste_manual_pac': True,
     # CALCULOS CPV
     'calcula_cpv': False,
     # CALCULOS COMPRAS PAC
@@ -458,6 +460,7 @@ if variaveis_de_controle['importa_razao_ebs']:
 
     # Query para extrair os dados do Oracle
     base_query = """
+                   SELECT
                    LTRIM(o105514.EMPRESA, '0') AS EMPRESA
                     ,o105514.CONTA
                     ,o105514.SUBCONTA
@@ -668,7 +671,8 @@ if variaveis_de_controle['importa_base_pac']:
                     FONTE,
                     DATA_TRANSACAO,
                     ID_TRANSACAO,
-                    CENTRO
+                    CENTRO,
+                    '' AS DATA_BASE
                 FROM BOLINF.XXCST_CMV_V A
                 WHERE DATA_TRANSACAO BETWEEN TO_DATE(:DT_INI, 'YYYY-MM-DD') AND TO_DATE(:DT_FIM, 'YYYY-MM-DD')
                 and CONTA IN ({contas_formatadas})
@@ -746,6 +750,158 @@ if variaveis_de_controle['importa_base_pac']:
     except Exception as e:
         print(f"{RED}Erro ao processar os dados: {e}")
 
+# Update na BASE PAC
+if variaveis_de_controle['update_base_pac']:
+    # Atualizar a coluna DATA_BASE da PAC
+    try:
+        cursor = conn.cursor()
+
+        # Obter o número total de registros onde DATA_BASE é nula
+        cursor.execute("SELECT COUNT(*) FROM BASE_PAC WHERE DATA_BASE IS NULL")
+        total_registros = cursor.fetchone()[0]
+
+        # Definir o tamanho do lote
+        batch_size = 10000
+        num_batches = (total_registros // batch_size) + 1
+
+        with alive_bar(num_batches, title="Atualizando DATA_BASE") as bar:
+            for batch in range(num_batches):
+                update_query = f"""
+                UPDATE BASE_PAC
+                SET DATA_BASE = '01/' || 
+                    CASE 
+                        WHEN substr(PERIODO, 1, 3) = 'JAN' THEN '01'
+                        WHEN substr(PERIODO, 1, 3) = 'FEV' THEN '02'
+                        WHEN substr(PERIODO, 1, 3) = 'MAR' THEN '03'
+                        WHEN substr(PERIODO, 1, 3) = 'ABR' THEN '04'
+                        WHEN substr(PERIODO, 1, 3) = 'MAI' THEN '05'
+                        WHEN substr(PERIODO, 1, 3) = 'JUN' THEN '06'
+                        WHEN substr(PERIODO, 1, 3) = 'JUL' THEN '07'
+                        WHEN substr(PERIODO, 1, 3) = 'AGO' THEN '08'
+                        WHEN substr(PERIODO, 1, 3) = 'SET' THEN '09'
+                        WHEN substr(PERIODO, 1, 3) = 'OUT' THEN '10'
+                        WHEN substr(PERIODO, 1, 3) = 'NOV' THEN '11'
+                        WHEN substr(PERIODO, 1, 3) = 'DEZ' THEN '12'
+                    END || 
+                    '/' || '20' || substr(PERIODO, 5, 2)
+                WHERE rowid IN (
+                    SELECT rowid
+                    FROM BASE_PAC
+                    WHERE DATA_BASE IS NULL
+                    LIMIT {batch_size} OFFSET {batch * batch_size}
+                );
+                """
+                cursor.execute(update_query)
+                conn.commit()
+                bar()
+
+        print(f"{Fore.GREEN}Coluna DATA_BASE atualizada com sucesso.")
+
+    except sqlite3.Error as e:
+        print(f"{Fore.RED}Erro ao atualizar a coluna DATA_BASE: {e}")
+
+# Criação das tabelas de ajustes
+if variaveis_de_controle['ajuste_manual_pac']:
+
+    print(f"{BLUE}Importa Ajustes Manuais")
+    # Caminho da pasta contendo os arquivos de depara
+    pasta_ajustes_manuais = os.path.join(
+        r'\\172.22.0.33',
+        'Controladoria',
+        '_Exercicio 2023',
+        '34 - Somos',
+        '3 - Bases Relatorio CPV',
+        '4. Base Ajuste Manual'
+    )
+
+    try:
+        # Lista todos os arquivos na pasta
+        for arquivo_manuais in os.listdir(pasta_ajustes_manuais):
+            # Verifica se o arquivo é um arquivo Excel (.xlsx)
+            if arquivo_manuais.endswith('.xlsx'):
+                caminho_completo_ajustes = os.path.join(
+                    pasta_ajustes_manuais, arquivo_manuais)
+
+                # Leia o arquivo Excel sem considerar nenhuma linha como cabeçalho e pula a primeira linha do arquivo
+                depara = pd.read_excel(caminho_completo_ajustes)
+
+                # Usa o nome do arquivo (sem a extensão) como o nome da tabela
+                nome_tabela = f"{os.path.splitext(arquivo_manuais)[0]}_AJUSTE_MANUAL"
+
+                # Insere os dados no banco de dados, substituindo a tabela se ela já existir
+                depara.to_sql(nome_tabela, conn,
+                              if_exists='replace', index=False)
+
+                print(f"{GREEN}Tabela {nome_tabela} criada com sucesso.")
+    except Exception as e:
+        print(f"{RED}Erro ao processar os arquivos: {e}")
+
+    try:
+        cursor = conn.cursor()
+
+        # Função para deletar registros da BASE_PAC que existem na tabela manual informada
+        def deletar_registros(cursor, nome_tabela, empresa):
+            delete_query = f"""
+            DELETE FROM BASE_PAC 
+            WHERE EMPRESA = '{empresa}'
+            AND EXISTS (
+                SELECT 1 FROM {nome_tabela} B
+                WHERE 
+                    BASE_PAC.EMPRESA = B.EMPRESA
+                    AND BASE_PAC.PERIODO = B.PERIODO
+                    AND BASE_PAC.CONTA = B.CONTA
+                    AND BASE_PAC.FONTE = B.FONTE
+                    AND BASE_PAC.ID_TRANSACAO = B.ID_TRANSACAO
+                    AND BASE_PAC.VLR_TRANSACAO = B.VLR_TRANSACAO
+            )
+            """
+            cursor.execute(delete_query)
+            conn.commit()
+            print(
+                f"{GREEN}Registros deletados da tabela {nome_tabela} para a empresa {empresa} com sucesso.")
+
+        # Função para inserir registros na BASE_PAC a partir da tabela manual informada
+        def inserir_dados(cursor, nome_tabela):
+            insert_query = f"""
+            INSERT INTO BASE_PAC
+            (EMPRESA, PERIODO, VLR_TRANSACAO, TIPO_ORIGEM, DOCUMENTO_ORIGEM, FONTE,
+            DATA_TRANSACAO, ID_TRANSACAO, DATA_BASE, CENTRO, CONTA)
+            SELECT EMPRESA, PERIODO, VLR_TRANSACAO, TIPO_ORIGEM, DOCUMENTO_ORIGEM, FONTE,
+                DATA_TRANSACAO, ID_TRANSACAO, DATA_BASE, CENTRO, CONTA
+            FROM {nome_tabela}
+            """
+            cursor.execute(insert_query)
+            conn.commit()
+            print(
+                f"{GREEN}Registros da tabela {nome_tabela} inseridos na BASE_PAC com sucesso.")
+
+        # Função para processar tabelas de uma empresa específica
+        def processar_tabelas(cursor, empresa, tabelas):
+            print(
+                f"{WHITE}Aplicando Alterações Manuais das Bases Manuais PAC {empresa}")
+            for tabela_manual in tabelas:
+                deletar_registros(cursor, tabela_manual, empresa)
+                inserir_dados(cursor, tabela_manual)
+            print(f"{GREEN}Ajustes na PAC {empresa} aplicados com sucesso!")
+
+        # Processar as tabelas para a empresa 35
+        processar_tabelas(cursor, '35', ["BASE_ELABORA_35_AJUSTE_MANUAL",
+                                         "BASE_ELABORA_35_2_AJUSTE_MANUAL", "BASE_PAC_35_AJUSTE_MANUAL"])
+
+        # Processar as tabelas para a empresa 157
+        processar_tabelas(cursor, '157', [
+            "BASE_ELABORA_157_AJUSTE_MANUAL", '"Dif looping Maxi_AJUSTE_MANUAL"'])
+
+    except Exception as e:
+        conn.rollback()
+        print(f"{RED}Erro ao aplicar ajustes: {e}")
+
+    finally:
+        # Fechar o cursor
+        if cursor:
+            cursor.close()
+
+# sas
 if variaveis_de_controle['importa_sas']:
     print(f"{BLUE}Importa Base SAS")
 
@@ -1521,7 +1677,7 @@ if variaveis_de_controle['Segundo_Demonstrativo_CPV']:
         for empresa in empresas:
             query_base_sumarizada_demonstrativo_cpv_PAC = f"""
             SELECT DISTINCT
-                {data_base_conversion}, 
+                A.DATA_BASE, 
                 A.EMPRESA AS EMPRESA,
                 A.CONTA AS 'CONTA',
                 'BASE_PAC' AS FONTE,
@@ -1538,7 +1694,7 @@ if variaveis_de_controle['Segundo_Demonstrativo_CPV']:
             UNION ALL  
 
             SELECT DISTINCT
-                {data_base_conversion},
+                A.DATA_BASE,
                 A.EMPRESA AS EMPRESA,
                 A.CONTA as CONTA,
                 'BASE_PAC' AS FONTE,
@@ -1555,7 +1711,7 @@ if variaveis_de_controle['Segundo_Demonstrativo_CPV']:
             UNION ALL
 
             SELECT DISTINCT
-                {data_base_conversion},
+                A.DATA_BASE,
                 A.EMPRESA as EMPRESA,
                 A.CONTA as CONTA,
                 'BASE_PAC' AS FONTE,
